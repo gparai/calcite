@@ -4041,11 +4041,28 @@ public class SqlValidatorImpl implements SqlValidatorWithHints {
 
   public void validateAggregateParams(SqlCall aggCall, SqlNode filter,
       SqlValidatorScope scope) {
+    SqlOperator parentOperator = null;
     // For agg(expr), expr cannot itself contain aggregate function
     // invocations.  For example, SUM(2*MAX(x)) is illegal; when
     // we see it, we'll report the error for the SUM (not the MAX).
     // For more than one level of nesting, the error which results
     // depends on the traversal order for validation.
+
+    // For window function agg(expr), expr can contain an aggregate function
+    // For example, AVG(2*MAX(x)) OVER (partition by y) GROUP BY y is legal; Only
+    // one level of nesting is allowed since non-window aggregates cannot
+    // nest aggregates.
+    aggOrOverFinder.disableNestedAggregates();
+
+    if (aggCall instanceof SqlBasicCall) {
+      parentOperator = ((SqlBasicCall) aggCall).getParentOperator();
+    }
+
+    if (parentOperator != null
+            && parentOperator.getKind() == SqlKind.OVER) {
+      aggOrOverFinder.enableNestedAggregates();
+    }
+
     for (SqlNode param : aggCall.getOperandList()) {
       if (aggOrOverFinder.findAgg(param) != null) {
         throw newValidationError(aggCall, RESOURCE.nestedAggIllegal());
@@ -4055,6 +4072,11 @@ public class SqlValidatorImpl implements SqlValidatorWithHints {
       if (aggOrOverFinder.findAgg(filter) != null) {
         throw newValidationError(filter, RESOURCE.aggregateInFilterIllegal());
       }
+    }
+
+    if (parentOperator != null
+            && parentOperator.getKind() == SqlKind.OVER) {
+      aggOrOverFinder.disableNestedAggregates();
     }
   }
 

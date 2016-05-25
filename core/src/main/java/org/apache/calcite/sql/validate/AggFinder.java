@@ -38,9 +38,11 @@ import java.util.List;
  */
 class AggFinder extends SqlBasicVisitor<Void> {
   //~ Instance fields --------------------------------------------------------
-
+  private static final int MAX_NESTED_AGG_LEVEL = 2;
   private final SqlOperatorTable opTab;
   private final boolean over;
+  private boolean nestedAgg;
+  private byte nestedAggLevel;
 
   //~ Constructors -----------------------------------------------------------
 
@@ -54,9 +56,21 @@ class AggFinder extends SqlBasicVisitor<Void> {
   AggFinder(SqlOperatorTable opTab, boolean over) {
     this.opTab = opTab;
     this.over = over;
+    this.nestedAgg = false;
+    this.nestedAggLevel = 0;
   }
 
   //~ Methods ----------------------------------------------------------------
+
+  public void enableNestedAggregates()  {
+    this.nestedAgg = true;
+    this.nestedAggLevel = 0;
+  }
+
+  public void disableNestedAggregates()  {
+    this.nestedAgg = false;
+    this.nestedAggLevel = 0;
+  }
 
   /**
    * Finds an aggregate.
@@ -89,7 +103,12 @@ class AggFinder extends SqlBasicVisitor<Void> {
   public Void visit(SqlCall call) {
     final SqlOperator operator = call.getOperator();
     if (operator.isAggregator()) {
-      throw new Util.FoundOne(call);
+      if (nestedAgg
+              && nestedAggLevel <= MAX_NESTED_AGG_LEVEL) {
+        ++nestedAggLevel;
+      } else {
+        throw new Util.FoundOne(call);
+      }
     }
     // User-defined function may not be resolved yet.
     if (operator instanceof SqlFunction) {
@@ -100,7 +119,12 @@ class AggFinder extends SqlBasicVisitor<Void> {
             sqlFunction.getFunctionType(), FUNCTION, list);
         for (SqlOperator sqlOperator : list) {
           if (sqlOperator.isAggregator()) {
-            throw new Util.FoundOne(call);
+            if (nestedAgg
+                    && nestedAggLevel <= MAX_NESTED_AGG_LEVEL) {
+              ++nestedAggLevel;
+            } else {
+              throw new Util.FoundOne(call);
+            }
           }
         }
       }

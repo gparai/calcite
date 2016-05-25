@@ -4425,11 +4425,18 @@ public class SqlToRelConverter {
       }
       // ignore window aggregates and ranking functions (associated with OVER operator)
       if (call.getOperator().getKind() == SqlKind.OVER) {
-        return null;
+        if (call.operand(0).getKind() == SqlKind.RANK) {
+          return null;
+        }
       }
+
       if (call.getOperator().isAggregator()) {
-        translateAgg(call, null, call);
-        return null;
+        if (!(call instanceof SqlBasicCall)
+            || ((SqlBasicCall) call).getParentOperator() == null
+            || ((SqlBasicCall) call).getParentOperator().getKind() != SqlKind.OVER) {
+          translateAgg(call, null, call);
+          return null;
+        }
       }
       for (SqlNode operand : call.getOperandList()) {
         // Operands are occasionally null, e.g. switched CASE arg 0.

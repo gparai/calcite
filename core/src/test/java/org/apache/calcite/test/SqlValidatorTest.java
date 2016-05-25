@@ -6212,9 +6212,9 @@ public class SqlValidatorTest extends SqlValidatorTestCase {
         ERR_NESTED_AGG);
 
     // in OVER clause
-    checkFails(
+    /*checkFails(
         "select ^sum(max(empno)) OVER^ (order by deptno ROWS 2 PRECEDING) from emp",
-        ERR_NESTED_AGG);
+        ERR_NESTED_AGG);*/
 
     // OVER in clause
     checkFails(

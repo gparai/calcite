@@ -1802,6 +1802,25 @@ public class RelOptRulesTest extends RelOptTestBase {
             + " where d.deptno + 10 = e.deptno * 2");
   }
 
+  @Test public void testNestedAggregates() {
+    /* Support nested aggregates - allows only nesting of the form
+     * window_agg(standard_agg) i.e. one level nesting of aggregates under window agg
+     */
+    final HepProgram program = HepProgram.builder()
+                    .addRuleInstance(ProjectToWindowRule.PROJECT)
+                    .build();
+    checkPlanning(program, "SELECT avg(sum(sal)) over (partition by deptno) "
+                    + "from emp group by deptno");
+  }
+
+  /*@Test public void testDistinctNonDistinctAggregates() {
+    final HepProgram program = HepProgram.builder()
+            .addRuleInstance(AggregateExpandDistinctAggregatesRule.JOIN)
+            .build();
+    checkPlanning(program, "select emp.empno, count(*), count(distinct dept.deptno) "
+            + "from sales.emp emp inner join"
+            + " sales.dept dept on emp.deptno = dept.deptno group by emp.empno");
+  }*/
 }
 
 // End RelOptRulesTest.java

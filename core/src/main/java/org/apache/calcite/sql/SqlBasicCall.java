@@ -29,6 +29,7 @@ public class SqlBasicCall extends SqlCall {
   public final SqlNode[] operands;
   private final SqlLiteral functionQuantifier;
   private final boolean expanded;
+  private SqlOperator parentOperator;
 
   public SqlBasicCall(
       SqlOperator operator,
@@ -48,6 +49,7 @@ public class SqlBasicCall extends SqlCall {
     this.operands = operands;
     this.expanded = expanded;
     this.functionQuantifier = functionQualifier;
+    this.parentOperator = null;
   }
 
   public SqlKind getKind() {
@@ -76,6 +78,14 @@ public class SqlBasicCall extends SqlCall {
 
   public List<SqlNode> getOperandList() {
     return UnmodifiableArrayList.of(operands); // not immutable, but quick
+  }
+
+  public void setParentOperator(SqlOperator parentOperator) {
+    this.parentOperator = parentOperator;
+  }
+
+  public SqlOperator getParentOperator() {
+    return this.parentOperator;
   }
 
   @SuppressWarnings("unchecked")
