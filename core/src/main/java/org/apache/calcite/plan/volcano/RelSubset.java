@@ -270,6 +270,10 @@ public class RelSubset extends AbstractRelNode {
     return set;
   }
 
+  public RelNode getRel() {
+    return set.rel;
+  }
+
   /**
    * Adds expression <code>rel</code> to this subset.
    */
