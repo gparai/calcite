@@ -148,6 +148,10 @@ public class RelSubset extends AbstractRelNode {
     return best;
   }
 
+  public RelNode getOriginal() {
+    return set.rel;
+  }
+
   public RelNode copy(RelTraitSet traitSet, List<RelNode> inputs) {
     throw new UnsupportedOperationException();
   }
