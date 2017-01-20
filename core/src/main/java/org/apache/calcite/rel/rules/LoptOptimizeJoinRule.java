@@ -767,7 +767,9 @@ public class LoptOptimizeJoinRule extends RelOptRule {
     // best one to add next
     int nextFactor = -1;
     int bestWeight = 0;
-    Double bestCardinality = null;
+    Double bestJoinCardinality = null;
+    Double bestTableCardinality = null;
+
     int [][] factorWeights = multiJoin.getFactorWeights();
     for (int factor : BitSets.toIter(factorsToAdd)) {
       // if the factor corresponds to a dimension table whose
@@ -802,16 +804,18 @@ public class LoptOptimizeJoinRule extends RelOptRule {
       // this factor joins with some part of the current join
       // tree and is potentially better than other factors
       // already considered
-      Double cardinality = null;
+      Double joinCardinality = null;
+      Double tableCardinality = null;
       if ((dimWeight > 0)
           && ((dimWeight > bestWeight) || (dimWeight == bestWeight))) {
-        cardinality =
+        joinCardinality =
             computeJoinCardinality(
                 multiJoin,
                 semiJoinOpt,
                 joinTree,
                 filtersToAdd,
                 factor);
+        tableCardinality = RelMetadataQuery.getRowCount(multiJoin.getJoinFactor(factor));
       }
 
       // if two factors have the same weight, pick the one
@@ -819,15 +823,20 @@ public class LoptOptimizeJoinRule extends RelOptRule {
       // the join being considered
       if ((dimWeight > bestWeight)
           || ((dimWeight == bestWeight)
-          && ((bestCardinality == null)
-          || ((cardinality != null)
-          && (cardinality > bestCardinality))))) {
+          && (bestJoinCardinality == null)
+          || ((joinCardinality != null)
+          && (joinCardinality > bestJoinCardinality)
+            // If join cardinality is the same pick the smaller factor
+            || (joinCardinality == bestJoinCardinality
+                && (bestTableCardinality == null
+                    || (tableCardinality != null
+                        && tableCardinality < bestTableCardinality)))))) {
         nextFactor = factor;
         bestWeight = dimWeight;
-        bestCardinality = cardinality;
+        bestJoinCardinality = joinCardinality;
+        bestTableCardinality = tableCardinality;
       }
     }
-
     return nextFactor;
   }
 
@@ -950,6 +959,36 @@ public class LoptOptimizeJoinRule extends RelOptRule {
       bestTree = pushDownTree;
     } else {
       if (costPushDown.isEqWithEpsilon(costTop)) {
+        // if noth plans cost the same (with an allowable round-off
+        // margin of error), favor one that keeps the larger table
+        // further up the tree
+        int childNo = pushDownPossible(multiJoin, joinTree, factorToAdd, factorsNeeded, selfJoin);
+        if (childNo != -1) {
+          double factorCardinality = RelMetadataQuery.getRowCount(
+              multiJoin.getJoinFactor(factorToAdd));
+          double pushDownSiblingCardinality;
+          double cardinalityFactor;
+          if (childNo == 0) {
+            pushDownSiblingCardinality = RelMetadataQuery.getRowCount(
+                pushDownTree.getJoinTree().getInput(1));
+          } else {
+            pushDownSiblingCardinality = RelMetadataQuery.getRowCount(
+                pushDownTree.getJoinTree().getInput(0));
+          }
+          cardinalityFactor = factorCardinality / pushDownSiblingCardinality;
+          if (cardinalityFactor > 1) {
+            cardinalityFactor = pushDownSiblingCardinality / factorCardinality;
+          }
+          // Only when cardinalities sufficiently different
+          if (cardinalityFactor <= 0.75) {
+            if (factorCardinality < pushDownSiblingCardinality) {
+              bestTree = pushDownTree;
+            } else {
+              bestTree = topTree;
+            }
+            return bestTree;
+          }
+        }
         // if both plans cost the same (with an allowable round-off
         // margin of error), favor the one that passes
         // around the wider rows further up in the tree
@@ -994,6 +1033,62 @@ public class LoptOptimizeJoinRule extends RelOptRule {
     return width;
   }
 
+  private int pushDownPossible(
+          LoptMultiJoin multiJoin,
+          LoptJoinTree joinTree,
+          int factorToAdd,
+          BitSet factorsNeeded,
+          boolean selfJoin) {
+    // pushdown option only works if we already have a join tree
+    if (!isJoinTree(joinTree.getJoinTree())) {
+      return -1;
+    }
+    int childNo = -1;
+    LoptJoinTree left = joinTree.getLeft();
+    LoptJoinTree right = joinTree.getRight();
+    Join joinRel = (Join) joinTree.getJoinTree();
+    JoinRelType joinType = joinRel.getJoinType();
+
+    // can't push factors pass self-joins because in order to later remove
+    // them, we need to keep the factors together
+    if (joinTree.isRemovableSelfJoin()) {
+      return -1;
+    }
+
+    // If there are no constraints as to which side the factor must
+    // be pushed, arbitrarily push to the left.  In the case of a
+    // self-join, always push to the input that contains the other
+    // half of the self-join.
+    if (selfJoin) {
+      BitSet selfJoinFactor = new BitSet(multiJoin.getNumJoinFactors());
+      selfJoinFactor.set(multiJoin.getOtherSelfJoinFactor(factorToAdd));
+      if (multiJoin.hasAllFactors(left, selfJoinFactor)) {
+        childNo = 0;
+      } else {
+        assert multiJoin.hasAllFactors(right, selfJoinFactor);
+        childNo = 1;
+      }
+    } else if (
+            (factorsNeeded.cardinality() == 0)
+                    && !joinType.generatesNullsOnLeft()) {
+      childNo = 0;
+    } else {
+      // push to the left if the LHS contains all factors that the
+      // current factor needs and that side is not null-generating;
+      // same check for RHS
+      if (multiJoin.hasAllFactors(left, factorsNeeded)
+              && !joinType.generatesNullsOnLeft()) {
+        childNo = 0;
+      } else if (
+              multiJoin.hasAllFactors(right, factorsNeeded)
+                      && !joinType.generatesNullsOnRight()) {
+        childNo = 1;
+      }
+      // if it couldn't be pushed down to either side, then it can
+      // only be put on top
+    }
+    return childNo;
+  }
   /**
    * Creates a join tree where the new factor is pushed down one of the
    * operands of the current join tree
@@ -1020,54 +1115,19 @@ public class LoptOptimizeJoinRule extends RelOptRule {
       BitSet factorsNeeded,
       List<RexNode> filtersToAdd,
       boolean selfJoin) {
+    int childNo = -1;
     // pushdown option only works if we already have a join tree
     if (!isJoinTree(joinTree.getJoinTree())) {
       return null;
     }
-    int childNo = -1;
+
     LoptJoinTree left = joinTree.getLeft();
     LoptJoinTree right = joinTree.getRight();
     Join joinRel = (Join) joinTree.getJoinTree();
     JoinRelType joinType = joinRel.getJoinType();
 
-    // can't push factors pass self-joins because in order to later remove
-    // them, we need to keep the factors together
-    if (joinTree.isRemovableSelfJoin()) {
-      return null;
-    }
+    childNo = pushDownPossible(multiJoin, joinTree, factorToAdd, factorsNeeded, selfJoin);
 
-    // If there are no constraints as to which side the factor must
-    // be pushed, arbitrarily push to the left.  In the case of a
-    // self-join, always push to the input that contains the other
-    // half of the self-join.
-    if (selfJoin) {
-      BitSet selfJoinFactor = new BitSet(multiJoin.getNumJoinFactors());
-      selfJoinFactor.set(multiJoin.getOtherSelfJoinFactor(factorToAdd));
-      if (multiJoin.hasAllFactors(left, selfJoinFactor)) {
-        childNo = 0;
-      } else {
-        assert multiJoin.hasAllFactors(right, selfJoinFactor);
-        childNo = 1;
-      }
-    } else if (
-        (factorsNeeded.cardinality() == 0)
-            && !joinType.generatesNullsOnLeft()) {
-      childNo = 0;
-    } else {
-      // push to the left if the LHS contains all factors that the
-      // current factor needs and that side is not null-generating;
-      // same check for RHS
-      if (multiJoin.hasAllFactors(left, factorsNeeded)
-          && !joinType.generatesNullsOnLeft()) {
-        childNo = 0;
-      } else if (
-          multiJoin.hasAllFactors(right, factorsNeeded)
-              && !joinType.generatesNullsOnRight()) {
-        childNo = 1;
-      }
-      // if it couldn't be pushed down to either side, then it can
-      // only be put on top
-    }
     if (childNo == -1) {
       return null;
     }
