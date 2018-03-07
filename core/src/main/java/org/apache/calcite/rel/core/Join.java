@@ -189,7 +189,7 @@ public abstract class Join extends BiRel {
   public static double estimateJoinedRows(
       Join joinRel,
       RexNode condition) {
-    final RelMetadataQuery mq = joinRel.getCluster().getMetadataQuery();
+    final RelMetadataQuery mq = RelMetadataQuery.instance();
     return Util.first(RelMdUtil.getJoinRowCount(mq, joinRel, condition), 1D);
   }
 
