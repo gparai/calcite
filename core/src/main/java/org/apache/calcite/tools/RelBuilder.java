@@ -139,6 +139,7 @@ public class RelBuilder {
   private final RelFactories.MatchFactory matchFactory;
   private final Deque<Frame> stack = new ArrayDeque<>();
   private final boolean simplify;
+  private final boolean simplifyFilters;
   private final RexSimplify simplifier;
   private final RexSimplify simplifierUnknownAsFalse;
 
@@ -150,6 +151,8 @@ public class RelBuilder {
       context = Contexts.EMPTY_CONTEXT;
     }
     this.simplify = Hook.REL_BUILDER_SIMPLIFY.get(true);
+    this.simplifyFilters = Hook.REL_BUILDER_SIMPLIFY_FILTERS.get(true);
+
     this.aggregateFactory =
         Util.first(context.unwrap(RelFactories.AggregateFactory.class),
             RelFactories.DEFAULT_AGGREGATE_FACTORY);
@@ -934,8 +937,10 @@ public class RelBuilder {
    * and optimized in a similar way to the {@link #and} method.
    * If the result is TRUE no filter is created. */
   public RelBuilder filter(Iterable<? extends RexNode> predicates) {
-    final RexNode simplifiedPredicates =
-        simplifierUnknownAsFalse.simplifyFilterPredicates(predicates);
+    RexNode simplifiedPredicates = RexUtil.composeConjunction(getRexBuilder(), predicates, false);
+    if (simplifyFilters) {
+      simplifiedPredicates = simplifierUnknownAsFalse.simplifyFilterPredicates(predicates);
+    }
     if (simplifiedPredicates == null) {
       return empty();
     }
@@ -2132,6 +2137,20 @@ public class RelBuilder {
         return rexBuilder.makeInputRef(right, inputRef.getIndex() - leftCount);
       }
     }
+  }
+
+  /**
+   * Returns whether this {@code RelBuilder} simplifies expressions or not
+   */
+  public boolean canSimplifyExpressions() {
+    return simplify;
+  }
+
+  /**
+   * Returns whether this {@code RelBuilder} simplifies filter expressions or not
+   */
+  public boolean canSimplifyFilterExpressions() {
+    return simplifyFilters;
   }
 }
 

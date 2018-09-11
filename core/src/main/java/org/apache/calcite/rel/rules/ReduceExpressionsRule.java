@@ -160,8 +160,8 @@ public abstract class ReduceExpressionsRule extends RelOptRule {
       final RelMetadataQuery mq = call.getMetadataQuery();
       final RelOptPredicateList predicates =
           mq.getPulledUpPredicates(filter.getInput());
-      if (reduceExpressions(filter, expList, predicates, true,
-          matchNullability)) {
+      if (reduceExpressions(filter, expList, predicates,
+              call.builder().canSimplifyFilterExpressions(), true, matchNullability)) {
         assert expList.size() == 1;
         newConditionExp = expList.get(0);
         reduced = true;
@@ -285,7 +285,7 @@ public abstract class ReduceExpressionsRule extends RelOptRule {
           mq.getPulledUpPredicates(project.getInput());
       final List<RexNode> expList =
           Lists.newArrayList(project.getProjects());
-      if (reduceExpressions(project, expList, predicates, false,
+      if (reduceExpressions(project, expList, predicates, true, false,
           matchNullability)) {
         call.transformTo(
             call.builder()
@@ -328,7 +328,7 @@ public abstract class ReduceExpressionsRule extends RelOptRule {
       final RelOptPredicateList predicates =
           leftPredicates.union(rexBuilder,
               rightPredicates.shift(rexBuilder, fieldCount));
-      if (!reduceExpressions(join, expList, predicates, true,
+      if (!reduceExpressions(join, expList, predicates, true, true,
           matchNullability)) {
         return;
       }
@@ -388,7 +388,7 @@ public abstract class ReduceExpressionsRule extends RelOptRule {
         expandedExprList.add(expr.accept(shuttle));
       }
       final RelOptPredicateList predicates = RelOptPredicateList.EMPTY;
-      if (reduceExpressions(calc, expandedExprList, predicates, false,
+      if (reduceExpressions(calc, expandedExprList, predicates, true, false,
           matchNullability)) {
         final RexProgramBuilder builder =
             new RexProgramBuilder(
@@ -487,13 +487,13 @@ public abstract class ReduceExpressionsRule extends RelOptRule {
    */
   protected static boolean reduceExpressions(RelNode rel, List<RexNode> expList,
       RelOptPredicateList predicates) {
-    return reduceExpressions(rel, expList, predicates, false, true);
+    return reduceExpressions(rel, expList, predicates, true, false, true);
   }
 
   @Deprecated // to be removed before 2.0
   protected static boolean reduceExpressions(RelNode rel, List<RexNode> expList,
       RelOptPredicateList predicates, boolean unknownAsFalse) {
-    return reduceExpressions(rel, expList, predicates, unknownAsFalse, true);
+    return reduceExpressions(rel, expList, predicates, true, unknownAsFalse, true);
   }
 
   /**
@@ -527,7 +527,7 @@ public abstract class ReduceExpressionsRule extends RelOptRule {
    * @return whether reduction found something to change, and succeeded
    */
   protected static boolean reduceExpressions(RelNode rel, List<RexNode> expList,
-      RelOptPredicateList predicates, boolean unknownAsFalse,
+      RelOptPredicateList predicates, boolean simplifyExprs, boolean unknownAsFalse,
       boolean matchNullability) {
     final RelOptCluster cluster = rel.getCluster();
     final RexBuilder rexBuilder = cluster.getRexBuilder();
@@ -540,15 +540,17 @@ public abstract class ReduceExpressionsRule extends RelOptRule {
     boolean reduced = reduceExpressionsInternal(rel, simplify, expList,
         predicates);
 
-    final ExprSimplifier simplifier =
-        new ExprSimplifier(simplify, matchNullability);
     boolean simplified = false;
-    for (int i = 0; i < expList.size(); i++) {
-      RexNode expr2 = simplifier.apply(expList.get(i));
-      if (!expr2.toString().equals(expList.get(i).toString())) {
-        expList.remove(i);
-        expList.add(i, expr2);
-        simplified = true;
+    if (simplifyExprs) {
+      final ExprSimplifier simplifier =
+              new ExprSimplifier(simplify, matchNullability);
+      for (int i = 0; i < expList.size(); i++) {
+        RexNode expr2 = simplifier.apply(expList.get(i));
+        if (!expr2.toString().equals(expList.get(i).toString())) {
+          expList.remove(i);
+          expList.add(i, expr2);
+          simplified = true;
+        }
       }
     }
 
